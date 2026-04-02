@@ -1,32 +1,22 @@
 const bcrypt = require("bcrypt");
 const pool = require("../config/db");
+const logger = require("../config/logger");
 
 const ALLOWED_CATEGORIES = ["APL", "BPL", "AAY"];
 
 const createRationCard = async (req, res, next) => {
-  console.log("Hit POST /api/admin/ration-cards", {
-    body: req.body,
-  });
 
   const client = await pool.connect();
 
   try {
-    const { card_number, category, shop_id, head, members } = req.body;
+    const { card_number, category, shop_id, head, members = [] } = req.body;
 
-    if (
-      !card_number ||
-      !category ||
-      !shop_id ||
-      !head ||
-      !Array.isArray(members)
-    ) {
+    if (!card_number || !category || !shop_id || !head || !Array.isArray(members)) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
     if (!ALLOWED_CATEGORIES.includes(category)) {
-      return res
-        .status(400)
-        .json({ error: "Invalid category. Allowed: APL, BPL, AAY" });
+      return res.status(400).json({ error: "Invalid category. Allowed: APL, BPL, AAY" });
     }
 
     if (!head.name || typeof head.age !== "number" || !head.mobile) {
@@ -64,16 +54,12 @@ const createRationCard = async (req, res, next) => {
 
     const policyResult = await client.query(
       `SELECT rice_per_person_kg, wheat_per_person_kg, sugar_per_person_kg
-       FROM policies
-       WHERE category = $1
-       LIMIT 1`,
+       FROM policies WHERE category = $1 LIMIT 1`,
       [category],
     );
     if (policyResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res
-        .status(400)
-        .json({ error: `Policy not found for category ${category}` });
+      return res.status(400).json({ error: `Policy not found for category ${category}` });
     }
     const policy = policyResult.rows[0];
 
@@ -91,8 +77,7 @@ const createRationCard = async (req, res, next) => {
 
     const rationCardResult = await client.query(
       `INSERT INTO ration_cards (card_number, category, head_user_id, shop_id, area_id)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, card_number`,
+       VALUES ($1, $2, $3, $4, $5) RETURNING id, card_number`,
       [card_number, category, headUserId, shop_id, areaId],
     );
     const rationCard = rationCardResult.rows[0];
@@ -107,12 +92,10 @@ const createRationCard = async (req, res, next) => {
       if (!member.name || typeof member.age !== "number") {
         throw new Error("Invalid member details");
       }
-
       const memberUserResult = await client.query(
         "INSERT INTO users (role, mobile) VALUES ('beneficiary', NULL) RETURNING id",
       );
       const memberUserId = memberUserResult.rows[0].id;
-
       await client.query(
         `INSERT INTO family_members (ration_card_id, user_id, name, age, is_head)
          VALUES ($1, $2, $3, $4, false)`,
@@ -133,11 +116,10 @@ const createRationCard = async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    logger.info('Ration card created', { card_number, members_created: totalMembers });
+
     return res.status(201).json({
-      ration_card: {
-        id: rationCard.id,
-        card_number: rationCard.card_number,
-      },
+      ration_card: { id: rationCard.id, card_number: rationCard.card_number },
       members_created: totalMembers,
       wallet: {
         rice_balance_kg: Number(riceBalance.toFixed(2)),
@@ -146,15 +128,8 @@ const createRationCard = async (req, res, next) => {
       },
     });
   } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      // Ignore rollback failures and surface original error.
-    }
-
-    return res
-      .status(500)
-      .json({ error: error.message || "Failed to create ration card" });
+    try { await client.query("ROLLBACK"); } catch (_) { }
+    return res.status(500).json({ error: error.message || "Failed to create ration card" });
   } finally {
     client.release();
   }
@@ -163,58 +138,53 @@ const createRationCard = async (req, res, next) => {
 const getBeneficiaries = async (req, res, next) => {
   try {
     const { category, area_id, shop_id } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
     const params = [];
     const filters = [];
 
-    if (category) {
-      params.push(category);
-      filters.push(`rc.category = $${params.length}`);
-    }
+    if (category) { params.push(category); filters.push(`rc.category = $${params.length}`); }
+    if (area_id) { params.push(area_id); filters.push(`rc.area_id = $${params.length}`); }
+    if (shop_id) { params.push(shop_id); filters.push(`rc.shop_id = $${params.length}`); }
 
-    if (area_id) {
-      params.push(area_id);
-      filters.push(`rc.area_id = $${params.length}`);
-    }
+    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
-    if (shop_id) {
-      params.push(shop_id);
-      filters.push(`rc.shop_id = $${params.length}`);
-    }
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM ration_cards rc ${whereClause}`,
+      params,
+    );
+    const total = parseInt(countResult.rows[0].count);
 
-    const whereClause =
-      filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    params.push(limit);
+    const limitIdx = params.length;
+    params.push(offset);
+    const offsetIdx = params.length;
 
-    const query = `
-      SELECT
-        fm_head.name,
-        u.mobile,
-        rc.card_number,
-        rc.category,
-        s.shop_name,
-        a.name AS area_name,
-        (
-          SELECT COUNT(*)
-          FROM family_members fm_count
-          WHERE fm_count.ration_card_id = rc.id
-        )::int AS family_size
-      FROM ration_cards rc
-      INNER JOIN family_members fm_head
-        ON fm_head.ration_card_id = rc.id AND fm_head.is_head = true
-      INNER JOIN users u
-        ON u.id = fm_head.user_id
-      INNER JOIN shops s
-        ON s.id = rc.shop_id
-      INNER JOIN areas a
-        ON a.id = rc.area_id
-      ${whereClause}
-      ORDER BY rc.created_at DESC
-    `;
-
-    const result = await pool.query(query, params);
+    const result = await pool.query(
+      `SELECT
+         fm_head.name,
+         u.mobile,
+         rc.card_number,
+         rc.category,
+         s.shop_name,
+         a.name AS area_name,
+         (SELECT COUNT(*) FROM family_members fm_c WHERE fm_c.ration_card_id = rc.id)::int AS family_size
+       FROM ration_cards rc
+       INNER JOIN family_members fm_head ON fm_head.ration_card_id = rc.id AND fm_head.is_head = true
+       INNER JOIN users u  ON u.id  = fm_head.user_id
+       INNER JOIN shops s  ON s.id  = rc.shop_id
+       INNER JOIN areas a  ON a.id  = rc.area_id
+       ${whereClause}
+       ORDER BY rc.created_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      params,
+    );
 
     return res.status(200).json({
-      total: result.rows.length,
-      beneficiaries: result.rows,
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     return next(error);
@@ -222,9 +192,15 @@ const getBeneficiaries = async (req, res, next) => {
 };
 
 const getRationCards = async (req, res, next) => {
-  console.log("Hit GET /api/admin/ration-cards", { query: req.query });
 
   try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
+    const countResult = await pool.query(`SELECT COUNT(*) FROM ration_cards`);
+    const total = parseInt(countResult.rows[0].count);
+
     const result = await pool.query(
       `SELECT rc.id, rc.card_number, rc.category, rc.created_at,
               rc.head_user_id, rc.shop_id, rc.area_id,
@@ -235,12 +211,14 @@ const getRationCards = async (req, res, next) => {
        LEFT JOIN users u ON u.id = rc.head_user_id
        LEFT JOIN shops s ON s.id = rc.shop_id
        LEFT JOIN areas a ON a.id = rc.area_id
-       ORDER BY rc.created_at DESC`,
+       ORDER BY rc.created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [limit, offset],
     );
 
     return res.status(200).json({
-      total: result.rows.length,
-      ration_cards: result.rows,
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     return next(error);
@@ -250,22 +228,14 @@ const getRationCards = async (req, res, next) => {
 const getDbHealth = async (req, res, next) => {
   console.log("Hit GET /api/admin/health");
 
-  const neededTables = [
-    "areas",
-    "shops",
-    "users",
-    "ration_cards",
-    "family_members",
-    "wallets",
-  ];
+  const neededTables = ["areas", "shops", "users", "ration_cards", "family_members", "wallets"];
 
   try {
     const checks = await Promise.all(
       neededTables.map(async (table) => {
         const result = await pool.query(
           `SELECT EXISTS (
-             SELECT 1
-             FROM information_schema.tables
+             SELECT 1 FROM information_schema.tables
              WHERE table_schema = 'public' AND table_name = $1
            ) AS exists`,
           [table],
@@ -273,7 +243,6 @@ const getDbHealth = async (req, res, next) => {
         return { table, exists: result.rows[0].exists };
       }),
     );
-
     return res.status(200).json({ status: "ok", checks });
   } catch (error) {
     return next(error);
@@ -283,6 +252,10 @@ const getDbHealth = async (req, res, next) => {
 const getUsers = async (req, res, next) => {
   try {
     const { role } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+
     const params = [];
     let whereClause = "";
 
@@ -291,26 +264,35 @@ const getUsers = async (req, res, next) => {
       whereClause = `WHERE role = $${params.length}`;
     }
 
-    const nameColumnResult = await pool.query(
-      `SELECT 1
-       FROM information_schema.columns
-       WHERE table_name = 'users' AND column_name = 'name'
-       LIMIT 1`,
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM users ${whereClause}`,
+      params,
     );
-    const nameSelect =
-      nameColumnResult.rows.length > 0 ? "name" : "NULL::varchar AS name";
+    const total = parseInt(countResult.rows[0].count);
+
+    const nameColumnResult = await pool.query(
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'users' AND column_name = 'name' LIMIT 1`,
+    );
+    const nameSelect = nameColumnResult.rows.length > 0 ? "name" : "NULL::varchar AS name";
+
+    params.push(limit);
+    const limitIdx = params.length;
+    params.push(offset);
+    const offsetIdx = params.length;
 
     const result = await pool.query(
       `SELECT id, role, ${nameSelect}, email, mobile, is_active
        FROM users
        ${whereClause}
-       ORDER BY created_at DESC`,
+       ORDER BY created_at DESC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       params,
     );
 
     return res.status(200).json({
-      total: result.rows.length,
-      users: result.rows,
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     return next(error);
@@ -327,19 +309,13 @@ const getAreas = async (req, res, next) => {
         COUNT(DISTINCT s.shopkeeper_id)::int AS shopkeeper_count,
         COUNT(DISTINCT fm.id)::int AS beneficiary_count
       FROM areas a
-      LEFT JOIN shops s
-        ON s.area_id = a.id
-      LEFT JOIN ration_cards rc
-        ON rc.area_id = a.id
-      LEFT JOIN family_members fm
-        ON fm.ration_card_id = rc.id AND fm.is_head = true
+      LEFT JOIN shops s ON s.area_id = a.id
+      LEFT JOIN ration_cards rc ON rc.area_id = a.id
+      LEFT JOIN family_members fm ON fm.ration_card_id = rc.id AND fm.is_head = true
       GROUP BY a.id, a.name
       ORDER BY a.name ASC
     `);
-
-    return res.status(200).json({
-      areas: result.rows,
-    });
+    return res.status(200).json({ areas: result.rows });
   } catch (error) {
     return next(error);
   }
@@ -349,6 +325,9 @@ const getShops = async (req, res, next) => {
   try {
     const { area_id } = req.query;
     const unassigned = req.query.unassigned === "true";
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
 
     if (unassigned) {
       const result = await pool.query(
@@ -358,46 +337,50 @@ const getShops = async (req, res, next) => {
          WHERE s.shopkeeper_id IS NULL
          ORDER BY a.name, s.shop_name`,
       );
-
-      return res.status(200).json({
-        shops: result.rows,
-      });
+      return res.status(200).json({ shops: result.rows });
     }
 
-    let query = `
-      SELECT
-        s.id,
-        s.shop_code,
-        s.shop_name,
-        a.name AS area_name,
-        COALESCE(split_part(sk.email, '@', 1), NULL) AS shopkeeper_name,
-        sk.mobile AS shopkeeper_mobile,
-        COUNT(DISTINCT rc.id)::int AS beneficiary_count
-      FROM shops s
-      INNER JOIN areas a
-        ON a.id = s.area_id
-      LEFT JOIN users sk
-        ON sk.id = s.shopkeeper_id
-      LEFT JOIN ration_cards rc
-        ON rc.shop_id = s.id
-    `;
-
-    const params = [];
-
+    const filterParams = [];
+    let whereClause = "";
     if (area_id) {
-      query += ` WHERE s.area_id = $1`;
-      params.push(area_id);
+      filterParams.push(area_id);
+      whereClause = `WHERE s.area_id = $${filterParams.length}`;
     }
 
-    query += `
-      GROUP BY s.id, s.shop_code, s.shop_name, a.name, sk.email, sk.mobile
-      ORDER BY s.shop_code ASC
-    `;
+    const countResult = await pool.query(
+      `SELECT COUNT(*) FROM shops s ${whereClause}`,
+      filterParams,
+    );
+    const total = parseInt(countResult.rows[0].count);
 
-    const result = await pool.query(query, params);
+    filterParams.push(limit);
+    const limitIdx = filterParams.length;
+    filterParams.push(offset);
+    const offsetIdx = filterParams.length;
+
+    const result = await pool.query(
+      `SELECT
+         s.id,
+         s.shop_code,
+         s.shop_name,
+         a.name AS area_name,
+         COALESCE(split_part(sk.email, '@', 1), NULL) AS shopkeeper_name,
+         sk.mobile AS shopkeeper_mobile,
+         COUNT(DISTINCT rc.id)::int AS beneficiary_count
+       FROM shops s
+       INNER JOIN areas a ON a.id = s.area_id
+       LEFT JOIN users sk ON sk.id = s.shopkeeper_id
+       LEFT JOIN ration_cards rc ON rc.shop_id = s.id
+       ${whereClause}
+       GROUP BY s.id, s.shop_code, s.shop_name, a.name, sk.email, sk.mobile
+       ORDER BY s.shop_code ASC
+       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
+      filterParams,
+    );
 
     return res.status(200).json({
-      shops: result.rows,
+      data: result.rows,
+      pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
   } catch (error) {
     return next(error);
@@ -416,20 +399,12 @@ const createShopkeeper = async (req, res, next) => {
 
     await client.query("BEGIN");
 
-    // Try to add name column (best-effort). In some environments the DB user
-    // may not have ALTER permissions; creation should still proceed.
     try {
-      await client.query(
-        "ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(150)",
-      );
-    } catch (schemaError) {
-      // Ignore schema migration errors at request time and continue with
-      // backward-compatible insert logic below.
-    }
+      await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(150)");
+    } catch (_) { }
 
     const emailResult = await client.query(
-      "SELECT id FROM users WHERE email = $1 LIMIT 1",
-      [email],
+      "SELECT id FROM users WHERE email = $1 LIMIT 1", [email],
     );
     if (emailResult.rows.length > 0) {
       await client.query("ROLLBACK");
@@ -437,8 +412,7 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     const mobileResult = await client.query(
-      "SELECT id FROM users WHERE mobile = $1 LIMIT 1",
-      [mobile],
+      "SELECT id FROM users WHERE mobile = $1 LIMIT 1", [mobile],
     );
     if (mobileResult.rows.length > 0) {
       await client.query("ROLLBACK");
@@ -446,8 +420,7 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     const shopResult = await client.query(
-      "SELECT id, shopkeeper_id FROM shops WHERE id = $1 LIMIT 1",
-      [shop_id],
+      "SELECT id, shopkeeper_id FROM shops WHERE id = $1 LIMIT 1", [shop_id],
     );
     if (shopResult.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -459,34 +432,28 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     const nameColumnResult = await client.query(
-      `SELECT 1
-       FROM information_schema.columns
-       WHERE table_name = 'users' AND column_name = 'name'
-       LIMIT 1`,
+      `SELECT 1 FROM information_schema.columns
+       WHERE table_name = 'users' AND column_name = 'name' LIMIT 1`,
     );
     const hasNameColumn = nameColumnResult.rows.length > 0;
 
     const passwordHash = await bcrypt.hash(password, 10);
     const userResult = hasNameColumn
       ? await client.query(
-          `INSERT INTO users (role, name, email, mobile, password_hash)
-           VALUES ('shopkeeper', $1, $2, $3, $4)
-           RETURNING id`,
-          [name, email, mobile, passwordHash],
-        )
+        `INSERT INTO users (role, name, email, mobile, password_hash)
+           VALUES ('shopkeeper', $1, $2, $3, $4) RETURNING id`,
+        [name, email, mobile, passwordHash],
+      )
       : await client.query(
-          `INSERT INTO users (role, email, mobile, password_hash)
-           VALUES ('shopkeeper', $1, $2, $3)
-           RETURNING id`,
-          [email, mobile, passwordHash],
-        );
+        `INSERT INTO users (role, email, mobile, password_hash)
+           VALUES ('shopkeeper', $1, $2, $3) RETURNING id`,
+        [email, mobile, passwordHash],
+      );
 
     const newUserId = userResult.rows[0].id;
 
     const assignResult = await client.query(
-      `UPDATE shops
-       SET shopkeeper_id = $1
-       WHERE id = $2 AND shopkeeper_id IS NULL`,
+      `UPDATE shops SET shopkeeper_id = $1 WHERE id = $2 AND shopkeeper_id IS NULL`,
       [newUserId, shop_id],
     );
 
@@ -496,30 +463,17 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     await client.query("COMMIT");
-
-    return res.status(201).json({
-      message: "Shopkeeper created",
-      user_id: newUserId,
-    });
+    logger.info('Shopkeeper created', { email, shop_id });
+    return res.status(201).json({ message: "Shopkeeper created", user_id: newUserId });
   } catch (error) {
-    try {
-      await client.query("ROLLBACK");
-    } catch (rollbackError) {
-      // Ignore rollback failures and surface original error.
-    }
+    try { await client.query("ROLLBACK"); } catch (_) { }
 
     if (error.code === "23505") {
-      if (error.constraint === "users_mobile_key") {
-        return res.status(400).json({ error: "Mobile already exists" });
-      }
-      if (error.constraint === "users_email_key") {
-        return res.status(400).json({ error: "Email already exists" });
-      }
+      if (error.constraint === "users_mobile_key") return res.status(400).json({ error: "Mobile already exists" });
+      if (error.constraint === "users_email_key") return res.status(400).json({ error: "Email already exists" });
     }
 
-    return res.status(500).json({
-      error: error.message || "Failed to create shopkeeper",
-    });
+    return res.status(500).json({ error: error.message || "Failed to create shopkeeper" });
   } finally {
     client.release();
   }

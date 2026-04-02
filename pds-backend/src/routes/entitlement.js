@@ -30,6 +30,15 @@ router.post(
     try {
       const result = await runEntitlementAllocation();
 
+      if (result.skipped) {
+        return res.status(200).json({
+          skipped: true,
+          reason: result.reason,
+          processed: 0,
+          allocations: [],
+        });
+      }
+
       return res.status(200).json({
         message: "Allocation complete",
         processed: result.processed,

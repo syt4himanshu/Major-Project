@@ -9,6 +9,7 @@ import Users from './pages/Users';
 import Areas from './pages/Areas';
 import Shops from './pages/Shops';
 import Entitlements from './pages/Entitlements';
+import Validation from './pages/Validation';
 
 const DashboardLayout = () => {
   return (
@@ -36,6 +37,7 @@ const App = () => {
           <Route path="areas" element={<Areas />} />
           <Route path="shops" element={<Shops />} />
           <Route path="entitlements" element={<Entitlements />} />
+          <Route path="validation" element={<Validation />} />
         </Route>
       </Route>
 

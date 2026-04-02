@@ -1,11 +1,17 @@
 const express = require("express");
 const dotenv = require("dotenv");
 const cors = require("cors");
+const helmet = require("helmet");
+const rateLimit = require("express-rate-limit");
+const logger = require("./config/logger");
 const authRoutes = require("./routes/auth");
 const adminRoutes = require("./routes/admin");
 const shopkeeperRoutes = require("./routes/shopkeeper");
 const entitlementRoutes = require("./routes/entitlement");
+const beneficiaryRoutes = require("./routes/beneficiary");
+const validationRoutes = require("./routes/validation");
 const { startEntitlementCron } = require("./jobs/entitlementCron");
+const { startOtpCleanupCron } = require("./jobs/otpCleanup");
 const { verifyToken, requireRole } = require("./middleware/auth");
 const pool = require("./config/db");
 
@@ -62,26 +68,51 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.options("*", cors(corsOptions));
 
+// Security headers
+app.use(helmet());
+
+// Auth routes — strict (brute force protection)
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many attempts. Try again in 15 minutes.' },
+});
+app.use('/auth', authLimiter);
+
+// All other API routes — general limit
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 100,
+  message: { error: 'Too many requests. Slow down.' },
+});
+app.use('/api', apiLimiter);
+
 app.use(express.json());
 
 app.use("/auth", authRoutes);
 app.use("/api/admin", adminRoutes);
 app.use("/api/admin", entitlementRoutes);
 app.use("/api/shopkeeper", shopkeeperRoutes);
+app.use("/api/beneficiary", beneficiaryRoutes);
+app.use("/api/admin", validationRoutes);
 
 app.get("/api/admin/test", verifyToken, requireRole("admin"), (req, res) => {
   return res.status(200).json({ message: "Admin route works" });
 });
 
-startEntitlementCron();
+if (process.env.NODE_ENV !== 'test') {
+  startEntitlementCron();
+  startOtpCleanupCron();
+}
 
 app.use((err, req, res, next) => {
-  // Keep stack traces out of responses.
-  console.error(err);
-
-  return res.status(500).json({
-    error: "Internal server error",
+  logger.error('Unhandled error', {
+    message: err.message,
+    stack: err.stack,
+    path: req.path,
+    method: req.method,
   });
+  return res.status(500).json({ error: "Internal server error" });
 });
 
 const PORT = process.env.PORT || 5000;
@@ -133,27 +164,26 @@ const ensureDatabaseGuards = async () => {
   `);
 };
 
-ensureDatabaseGuards()
-  .then(() => {
-    const server = app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT}`);
-    });
+if (process.env.NODE_ENV !== 'test') {
+  ensureDatabaseGuards()
+    .then(() => {
+      const server = app.listen(PORT, () => {
+        logger.info(`Server running on port ${PORT}`);
+      });
 
-    server.on("error", (error) => {
-      if (error.code === "EADDRINUSE") {
-        console.error(
-          `Port ${PORT} is already in use. Set a different PORT in your .env and restart nodemon.`,
-        );
+      server.on("error", (error) => {
+        if (error.code === "EADDRINUSE") {
+          logger.error(`Port ${PORT} is already in use. Set a different PORT in your .env and restart nodemon.`);
+          process.exit(1);
+        }
+        logger.error("Server failed to start:", { message: error.message });
         process.exit(1);
-      }
-
-      console.error("Server failed to start:", error.message);
+      });
+    })
+    .catch((error) => {
+      logger.error("Failed to initialize database guards:", { message: error.message });
       process.exit(1);
     });
-  })
-  .catch((error) => {
-    console.error("Failed to initialize database guards:", error.message);
-    process.exit(1);
-  });
+}
 
 module.exports = app;

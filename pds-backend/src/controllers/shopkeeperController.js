@@ -1,4 +1,5 @@
 const pool = require("../config/db");
+const logger = require("../config/logger");
 
 const toNumber = (value) => Number.parseFloat(value || 0);
 
@@ -205,9 +206,9 @@ const dispense = async (req, res, next) => {
     const {
       ration_card_id: rationCardId,
       session_id: sessionId,
-      rice_qty_kg: riceQtyRaw = 0,
-      wheat_qty_kg: wheatQtyRaw = 0,
-      sugar_qty_kg: sugarQtyRaw = 0,
+      rice_qty: riceQtyRaw = 0,
+      wheat_qty: wheatQtyRaw = 0,
+      sugar_qty: sugarQtyRaw = 0,
     } = req.body;
 
     const riceQty = Number(riceQtyRaw);
@@ -236,6 +237,22 @@ const dispense = async (req, res, next) => {
       return res
         .status(400)
         .json({ error: "At least one quantity must be greater than zero" });
+    }
+
+    // Double-claim prevention: one dispense per ration card per month
+    const claimCheck = await pool.query(
+      `SELECT COUNT(*) FROM transactions
+       WHERE ration_card_id = $1
+         AND DATE(created_at) >= DATE_TRUNC('month', CURRENT_DATE)
+         AND DATE(created_at) < DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'`,
+      [rationCardId],
+    );
+    if (Number(claimCheck.rows[0].count) > 0) {
+      logger.warn('[Dispense] Double claim attempt', { ration_card_id: rationCardId });
+      return res.status(400).json({
+        error: "Already claimed this month",
+        detail: "This ration card has already been served in the current month",
+      });
     }
 
     await client.query("BEGIN");
@@ -314,6 +331,7 @@ const dispense = async (req, res, next) => {
     const wallet = walletResult.rows[0];
     if (wallet.shop_id !== shop.id) {
       await client.query("ROLLBACK");
+      logger.warn('Shop mismatch', { shopkeeper_id: req.user.id, ration_card_id: rationCardId });
       return res.status(403).json({ error: "Wallet belongs to another shop" });
     }
 
@@ -379,6 +397,8 @@ const dispense = async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    logger.info('Dispense success', { ration_card_id: rationCardId, rice_qty: riceQty, wheat_qty: wheatQty, sugar_qty: sugarQty });
+
     return res.status(200).json({
       message: "Dispensed successfully",
       transaction: txResult.rows[0],
@@ -406,8 +426,137 @@ const dispense = async (req, res, next) => {
   }
 };
 
+// POST /api/shopkeeper/transactions — blockchain-stable endpoint
+// Shape is final: never rename fields, never remove fields.
+const createTransaction = async (req, res, next) => {
+  const client = await pool.connect();
+
+  try {
+    const {
+      ration_card_id: rationCardId,
+      rice_qty: riceQtyRaw = 0,
+      wheat_qty: wheatQtyRaw = 0,
+      sugar_qty: sugarQtyRaw = 0,
+    } = req.body;
+
+    const riceQty = Number(riceQtyRaw);
+    const wheatQty = Number(wheatQtyRaw);
+    const sugarQty = Number(sugarQtyRaw);
+
+    // Double-claim prevention
+    const claimCheck = await pool.query(
+      `SELECT COUNT(*) FROM transactions
+       WHERE ration_card_id = $1
+         AND DATE(created_at) >= DATE_TRUNC('month', CURRENT_DATE)
+         AND DATE(created_at) <  DATE_TRUNC('month', CURRENT_DATE) + INTERVAL '1 month'`,
+      [rationCardId],
+    );
+    if (Number(claimCheck.rows[0].count) > 0) {
+      logger.warn('[Dispense] Double claim attempt', { ration_card_id: rationCardId });
+      return res.status(400).json({
+        error: 'Already claimed this month',
+        detail: 'This ration card has already been served in the current month',
+      });
+    }
+
+    await client.query('BEGIN');
+
+    const shop = await getAssignedShop(client, req.user.id);
+    if (!shop) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'No active shop assigned' });
+    }
+
+    // Wallet + shop ownership check
+    const walletResult = await client.query(
+      `SELECT w.id, w.ration_card_id, w.rice_balance_kg, w.wheat_balance_kg, w.sugar_balance_kg,
+              rc.shop_id, rc.card_number
+       FROM wallets w
+       JOIN ration_cards rc ON rc.id = w.ration_card_id
+       WHERE w.ration_card_id = $1
+       FOR UPDATE`,
+      [rationCardId],
+    );
+
+    if (walletResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+
+    const wallet = walletResult.rows[0];
+    if (wallet.shop_id !== shop.id) {
+      await client.query('ROLLBACK');
+      logger.warn('[Transaction] Shop mismatch', { shopkeeper_id: req.user.id, ration_card_id: rationCardId });
+      return res.status(403).json({ error: 'Beneficiary belongs to a different shop' });
+    }
+
+    const riceBalance = toNumber(wallet.rice_balance_kg);
+    const wheatBalance = toNumber(wallet.wheat_balance_kg);
+    const sugarBalance = toNumber(wallet.sugar_balance_kg);
+
+    if (riceQty > riceBalance || wheatQty > wheatBalance || sugarQty > sugarBalance) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({
+        error: 'Requested quantity exceeds wallet balance',
+        wallet: { rice_balance_kg: riceBalance, wheat_balance_kg: wheatBalance, sugar_balance_kg: sugarBalance },
+      });
+    }
+
+    const remainingRice = Number((riceBalance - riceQty).toFixed(2));
+    const remainingWheat = Number((wheatBalance - wheatQty).toFixed(2));
+    const remainingSugar = Number((sugarBalance - sugarQty).toFixed(2));
+
+    await client.query(
+      `UPDATE wallets
+       SET rice_balance_kg = $1, wheat_balance_kg = $2, sugar_balance_kg = $3, updated_at = NOW()
+       WHERE ration_card_id = $4`,
+      [remainingRice, remainingWheat, remainingSugar, rationCardId],
+    );
+
+    const txResult = await client.query(
+      `INSERT INTO transactions (ration_card_id, shop_id, rice_qty_kg, wheat_qty_kg, sugar_qty_kg, served_by)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, ration_card_id, shop_id, served_by, rice_qty_kg, wheat_qty_kg, sugar_qty_kg, created_at`,
+      [rationCardId, shop.id, riceQty, wheatQty, sugarQty, req.user.id],
+    );
+
+    await client.query('COMMIT');
+
+    const tx = txResult.rows[0];
+    logger.info('[Transaction] Success', { ration_card_id: rationCardId, transaction_id: tx.id });
+
+    // Stable blockchain payload — field names and shape are final
+    return res.status(200).json({
+      success: true,
+      transaction: {
+        id: tx.id,
+        ration_card_id: tx.ration_card_id,
+        card_number: wallet.card_number,
+        shop_id: tx.shop_id,
+        served_by: tx.served_by,
+        rice_qty_kg: toNumber(tx.rice_qty_kg),
+        wheat_qty_kg: toNumber(tx.wheat_qty_kg),
+        sugar_qty_kg: toNumber(tx.sugar_qty_kg),
+        created_at: tx.created_at,
+        blockchain_tx_hash: null,
+      },
+      remaining_wallet: {
+        rice_balance_kg: remainingRice,
+        wheat_balance_kg: remainingWheat,
+        sugar_balance_kg: remainingSugar,
+      },
+    });
+  } catch (error) {
+    try { await client.query('ROLLBACK'); } catch (_) { }
+    return next(error);
+  } finally {
+    client.release();
+  }
+};
+
 module.exports = {
   getMe,
   getBeneficiaryByRationCardId,
   dispense,
+  createTransaction,
 };

@@ -2,17 +2,17 @@ const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 const twilio = require('twilio');
 const pool = require('../config/db');
+const logger = require('../config/logger');
 
 const twilioClient = twilio(
   process.env.TWILIO_ACCOUNT_SID,
-  process.env.TWILIO_AUTH_TOKEN
+  process.env.TWILIO_AUTH_TOKEN,
 );
 
-const signToken = (payload) => {
-  return jwt.sign(payload, process.env.JWT_SECRET, {
+const signToken = (payload) =>
+  jwt.sign(payload, process.env.JWT_SECRET, {
     expiresIn: process.env.JWT_EXPIRES_IN || '7d',
   });
-};
 
 const login = async (req, res, next) => {
   try {
@@ -24,10 +24,11 @@ const login = async (req, res, next) => {
 
     const result = await pool.query(
       'SELECT id, role, email, password_hash FROM users WHERE email = $1 LIMIT 1',
-      [email]
+      [email],
     );
 
     if (result.rows.length === 0) {
+      logger.warn('Login failed', { email });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -35,16 +36,18 @@ const login = async (req, res, next) => {
     const isPasswordValid = await bcrypt.compare(password, user.password_hash);
 
     if (!isPasswordValid) {
+      logger.warn('Login failed', { email });
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
-    const token = signToken({
-      id: user.id,
-      role: user.role,
-      email: user.email,
-    });
+    logger.info('Login success', { email, role: user.role });
 
-    return res.status(200).json({ token });
+    const token = signToken({ id: user.id, role: user.role, email: user.email });
+
+    return res.status(200).json({
+      token,
+      user: { id: user.id, role: user.role, email: user.email },
+    });
   } catch (error) {
     return next(error);
   }
@@ -60,7 +63,7 @@ const sendOtp = async (req, res, next) => {
 
     const result = await pool.query(
       "SELECT id FROM users WHERE mobile = $1 AND role = 'beneficiary' LIMIT 1",
-      [mobile]
+      [mobile],
     );
 
     if (result.rows.length === 0) {
@@ -71,6 +74,7 @@ const sendOtp = async (req, res, next) => {
       .services(process.env.TWILIO_SERVICE_SID)
       .verifications.create({ to: mobile, channel: 'sms' });
 
+    logger.info('OTP sent', { mobile });
     return res.status(200).json({ message: 'OTP sent successfully' });
   } catch (error) {
     return next(error);
@@ -95,7 +99,7 @@ const verifyOtp = async (req, res, next) => {
 
     const result = await pool.query(
       'SELECT id, role, mobile FROM users WHERE mobile = $1 LIMIT 1',
-      [mobile]
+      [mobile],
     );
 
     if (result.rows.length === 0) {
@@ -103,20 +107,13 @@ const verifyOtp = async (req, res, next) => {
     }
 
     const user = result.rows[0];
-    const token = signToken({
-      id: user.id,
-      role: user.role,
-      mobile: user.mobile,
-    });
+    logger.info('OTP verified', { mobile });
 
+    const token = signToken({ id: user.id, role: user.role, mobile: user.mobile });
     return res.status(200).json({ token });
   } catch (error) {
     return next(error);
   }
 };
 
-module.exports = {
-  login,
-  sendOtp,
-  verifyOtp,
-};
+module.exports = { login, sendOtp, verifyOtp };

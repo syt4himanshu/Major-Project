@@ -65,6 +65,14 @@ const Sidebar = () => {
         >
           ⚡ Entitlements
         </NavLink>
+        <NavLink
+          to="/dashboard/validation"
+          className={({ isActive }) =>
+            `rounded-lg px-3 py-2 hover:bg-gray-700 ${isActive ? 'bg-gray-700' : ''}`
+          }
+        >
+          🔍 Validation
+        </NavLink>
       </nav>
 
       <div className="mt-auto p-4 border-t border-gray-800">
