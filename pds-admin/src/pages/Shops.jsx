@@ -14,7 +14,7 @@ const Shops = () => {
 
       try {
         const response = await api.get('/api/admin/shops');
-        setShops(response.data?.shops || []);
+        setShops(response.data?.shops || response.data?.data || []);
       } catch (fetchError) {
         setError(fetchError.response?.data?.error || 'Failed to load shops');
         setShops([]);

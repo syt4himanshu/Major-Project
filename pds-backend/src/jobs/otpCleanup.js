@@ -5,6 +5,12 @@ const logger = require("../config/logger");
 const startOtpCleanupCron = () => {
     cron.schedule("0 * * * *", async () => {
         try {
+            // Backward-compatible schema guard for environments created before `is_used` existed.
+            await pool.query(`
+        ALTER TABLE otp_verifications
+        ADD COLUMN IF NOT EXISTS is_used BOOLEAN NOT NULL DEFAULT false
+      `);
+
             const result = await pool.query(`
         UPDATE otp_verifications
         SET is_used = true

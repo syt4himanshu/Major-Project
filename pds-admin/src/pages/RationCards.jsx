@@ -19,7 +19,7 @@ const RationCards = () => {
 
       try {
         const response = await api.get('/api/admin/ration-cards');
-        setRationCards(response.data?.ration_cards || []);
+        setRationCards(response.data?.ration_cards || response.data?.data || []);
       } catch (fetchError) {
         setRationCards([]);
       } finally {

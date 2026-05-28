@@ -20,7 +20,7 @@ const Users = () => {
 
     try {
       const response = await api.get('/api/admin/users');
-      setUsers(response.data?.users || []);
+      setUsers(response.data?.users || response.data?.data || []);
     } catch (fetchError) {
       setError(fetchError.response?.data?.error || 'Failed to load users');
       setUsers([]);

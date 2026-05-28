@@ -97,6 +97,11 @@ router.get(
     requireRole("admin"),
     async (req, res) => {
         try {
+            await pool.query(`
+        ALTER TABLE otp_verifications
+        ADD COLUMN IF NOT EXISTS is_used BOOLEAN NOT NULL DEFAULT false
+      `);
+
             const [expiredOtps, noPasswordHash, dupMobile, anonTx] = await Promise.all([
                 pool.query(`
           SELECT COUNT(*) FROM otp_verifications

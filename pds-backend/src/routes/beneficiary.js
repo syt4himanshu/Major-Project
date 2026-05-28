@@ -13,6 +13,7 @@ const router = express.Router();
 router.use(verifyToken, requireRole("beneficiary"));
 
 router.get("/me", getMe);
+router.get("/profile", getMe);
 router.get("/wallet", getWallet);
 router.get("/family", getFamily);
 router.get("/transactions", getTransactions);

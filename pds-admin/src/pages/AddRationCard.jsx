@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { useNavigate } from 'react-router-dom';
 import api from '../api/axios';
 
@@ -29,15 +29,19 @@ const AddRationCard = () => {
 
   const {
     register,
-    watch,
+    control,
     setValue,
+    getValues,
     handleSubmit,
     formState: { errors, isSubmitting },
   } = useForm({
     defaultValues,
   });
 
-  const selectedAreaId = watch('area_id');
+  const selectedAreaId = useWatch({
+    control,
+    name: 'area_id',
+  });
 
   useEffect(() => {
     const fetchAreas = async () => {
@@ -64,18 +68,22 @@ const AddRationCard = () => {
   useEffect(() => {
     const fetchShopsByArea = async () => {
       if (!selectedAreaId) {
-        setShops([]);
-        setValue('shop_id', '');
+        setShops((prev) => (prev.length > 0 ? [] : prev));
+        if (getValues('shop_id')) {
+          setValue('shop_id', '');
+        }
         return;
       }
 
       setLoadingShops(true);
-      setValue('shop_id', '');
+      if (getValues('shop_id')) {
+        setValue('shop_id', '');
+      }
       try {
         const response = await api.get('/api/admin/shops', {
           params: { area_id: selectedAreaId },
         });
-        setShops(response.data?.shops || []);
+        setShops(response.data?.shops || response.data?.data || []);
       } catch (error) {
         setErrorBanner(error.response?.data?.error || 'Failed to load shops');
         setShops([]);
@@ -85,7 +93,7 @@ const AddRationCard = () => {
     };
 
     fetchShopsByArea();
-  }, [selectedAreaId, setValue]);
+  }, [selectedAreaId]);
 
   const addMember = () => {
     setMembers((prev) => [...prev, { name: '', age: '' }]);

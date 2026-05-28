@@ -4,22 +4,30 @@ const logger = require("../config/logger");
 
 const ALLOWED_CATEGORIES = ["APL", "BPL", "AAY"];
 
-const createRationCard = async (req, res, next) => {
+const normalizeIndianMobile = (value = "") => {
+  const digits = String(value).replace(/\D/g, "");
+  if (digits.length === 10) return `+91${digits}`;
+  if (digits.length === 12 && digits.startsWith("91")) return `+${digits}`;
+  return null;
+};
 
+const createRationCard = async (req, res, next) => {
   const client = await pool.connect();
+  const { card_number, category, shop_id, head, members = [] } = req.body;
 
   try {
-    const { card_number, category, shop_id, head, members = [] } = req.body;
-
-    if (!card_number || !category || !shop_id || !head || !Array.isArray(members)) {
+    if (
+      !card_number ||
+      !category ||
+      !shop_id ||
+      !head ||
+      !Array.isArray(members)
+    ) {
       return res.status(400).json({ error: "Missing required fields" });
     }
 
-    if (!ALLOWED_CATEGORIES.includes(category)) {
-      return res.status(400).json({ error: "Invalid category. Allowed: APL, BPL, AAY" });
-    }
-
-    if (!head.name || typeof head.age !== "number" || !head.mobile) {
+    const normalizedHeadMobile = normalizeIndianMobile(head.mobile);
+    if (!head.name || typeof head.age !== "number" || !normalizedHeadMobile) {
       return res.status(400).json({ error: "Invalid head details" });
     }
 
@@ -45,7 +53,7 @@ const createRationCard = async (req, res, next) => {
 
     const mobileExistsResult = await client.query(
       "SELECT id FROM users WHERE mobile = $1 LIMIT 1",
-      [head.mobile],
+      [normalizedHeadMobile],
     );
     if (mobileExistsResult.rows.length > 0) {
       await client.query("ROLLBACK");
@@ -59,13 +67,15 @@ const createRationCard = async (req, res, next) => {
     );
     if (policyResult.rows.length === 0) {
       await client.query("ROLLBACK");
-      return res.status(400).json({ error: `Policy not found for category ${category}` });
+      return res
+        .status(400)
+        .json({ error: `Policy not found for category ${category}` });
     }
     const policy = policyResult.rows[0];
 
     const headUserResult = await client.query(
       "INSERT INTO users (role, mobile) VALUES ('beneficiary', $1) RETURNING id",
-      [head.mobile],
+      [normalizedHeadMobile],
     );
     const headUserId = headUserResult.rows[0].id;
 
@@ -116,7 +126,10 @@ const createRationCard = async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    logger.info('Ration card created', { card_number, members_created: totalMembers });
+    logger.info("Ration card created", {
+      card_number,
+      members_created: totalMembers,
+    });
 
     return res.status(201).json({
       ration_card: { id: rationCard.id, card_number: rationCard.card_number },
@@ -128,8 +141,12 @@ const createRationCard = async (req, res, next) => {
       },
     });
   } catch (error) {
-    try { await client.query("ROLLBACK"); } catch (_) { }
-    return res.status(500).json({ error: error.message || "Failed to create ration card" });
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {}
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to create ration card" });
   } finally {
     client.release();
   }
@@ -145,11 +162,21 @@ const getBeneficiaries = async (req, res, next) => {
     const params = [];
     const filters = [];
 
-    if (category) { params.push(category); filters.push(`rc.category = $${params.length}`); }
-    if (area_id) { params.push(area_id); filters.push(`rc.area_id = $${params.length}`); }
-    if (shop_id) { params.push(shop_id); filters.push(`rc.shop_id = $${params.length}`); }
+    if (category) {
+      params.push(category);
+      filters.push(`rc.category = $${params.length}`);
+    }
+    if (area_id) {
+      params.push(area_id);
+      filters.push(`rc.area_id = $${params.length}`);
+    }
+    if (shop_id) {
+      params.push(shop_id);
+      filters.push(`rc.shop_id = $${params.length}`);
+    }
 
-    const whereClause = filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
+    const whereClause =
+      filters.length > 0 ? `WHERE ${filters.join(" AND ")}` : "";
 
     const countResult = await pool.query(
       `SELECT COUNT(*) FROM ration_cards rc ${whereClause}`,
@@ -192,7 +219,6 @@ const getBeneficiaries = async (req, res, next) => {
 };
 
 const getRationCards = async (req, res, next) => {
-
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 20;
@@ -228,7 +254,14 @@ const getRationCards = async (req, res, next) => {
 const getDbHealth = async (req, res, next) => {
   console.log("Hit GET /api/admin/health");
 
-  const neededTables = ["areas", "shops", "users", "ration_cards", "family_members", "wallets"];
+  const neededTables = [
+    "areas",
+    "shops",
+    "users",
+    "ration_cards",
+    "family_members",
+    "wallets",
+  ];
 
   try {
     const checks = await Promise.all(
@@ -274,7 +307,8 @@ const getUsers = async (req, res, next) => {
       `SELECT 1 FROM information_schema.columns
        WHERE table_name = 'users' AND column_name = 'name' LIMIT 1`,
     );
-    const nameSelect = nameColumnResult.rows.length > 0 ? "name" : "NULL::varchar AS name";
+    const nameSelect =
+      nameColumnResult.rows.length > 0 ? "name" : "NULL::varchar AS name";
 
     params.push(limit);
     const limitIdx = params.length;
@@ -400,11 +434,14 @@ const createShopkeeper = async (req, res, next) => {
     await client.query("BEGIN");
 
     try {
-      await client.query("ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(150)");
-    } catch (_) { }
+      await client.query(
+        "ALTER TABLE users ADD COLUMN IF NOT EXISTS name VARCHAR(150)",
+      );
+    } catch (_) {}
 
     const emailResult = await client.query(
-      "SELECT id FROM users WHERE email = $1 LIMIT 1", [email],
+      "SELECT id FROM users WHERE email = $1 LIMIT 1",
+      [email],
     );
     if (emailResult.rows.length > 0) {
       await client.query("ROLLBACK");
@@ -412,7 +449,8 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     const mobileResult = await client.query(
-      "SELECT id FROM users WHERE mobile = $1 LIMIT 1", [mobile],
+      "SELECT id FROM users WHERE mobile = $1 LIMIT 1",
+      [mobile],
     );
     if (mobileResult.rows.length > 0) {
       await client.query("ROLLBACK");
@@ -420,7 +458,8 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     const shopResult = await client.query(
-      "SELECT id, shopkeeper_id FROM shops WHERE id = $1 LIMIT 1", [shop_id],
+      "SELECT id, shopkeeper_id FROM shops WHERE id = $1 LIMIT 1",
+      [shop_id],
     );
     if (shopResult.rows.length === 0) {
       await client.query("ROLLBACK");
@@ -440,15 +479,15 @@ const createShopkeeper = async (req, res, next) => {
     const passwordHash = await bcrypt.hash(password, 10);
     const userResult = hasNameColumn
       ? await client.query(
-        `INSERT INTO users (role, name, email, mobile, password_hash)
+          `INSERT INTO users (role, name, email, mobile, password_hash)
            VALUES ('shopkeeper', $1, $2, $3, $4) RETURNING id`,
-        [name, email, mobile, passwordHash],
-      )
+          [name, email, mobile, passwordHash],
+        )
       : await client.query(
-        `INSERT INTO users (role, email, mobile, password_hash)
+          `INSERT INTO users (role, email, mobile, password_hash)
            VALUES ('shopkeeper', $1, $2, $3) RETURNING id`,
-        [email, mobile, passwordHash],
-      );
+          [email, mobile, passwordHash],
+        );
 
     const newUserId = userResult.rows[0].id;
 
@@ -463,17 +502,25 @@ const createShopkeeper = async (req, res, next) => {
     }
 
     await client.query("COMMIT");
-    logger.info('Shopkeeper created', { email, shop_id });
-    return res.status(201).json({ message: "Shopkeeper created", user_id: newUserId });
+    logger.info("Shopkeeper created", { email, shop_id });
+    return res
+      .status(201)
+      .json({ message: "Shopkeeper created", user_id: newUserId });
   } catch (error) {
-    try { await client.query("ROLLBACK"); } catch (_) { }
+    try {
+      await client.query("ROLLBACK");
+    } catch (_) {}
 
     if (error.code === "23505") {
-      if (error.constraint === "users_mobile_key") return res.status(400).json({ error: "Mobile already exists" });
-      if (error.constraint === "users_email_key") return res.status(400).json({ error: "Email already exists" });
+      if (error.constraint === "users_mobile_key")
+        return res.status(400).json({ error: "Mobile already exists" });
+      if (error.constraint === "users_email_key")
+        return res.status(400).json({ error: "Email already exists" });
     }
 
-    return res.status(500).json({ error: error.message || "Failed to create shopkeeper" });
+    return res
+      .status(500)
+      .json({ error: error.message || "Failed to create shopkeeper" });
   } finally {
     client.release();
   }

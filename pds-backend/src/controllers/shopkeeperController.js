@@ -121,7 +121,11 @@ const getBeneficiaryByRationCardId = async (req, res, next) => {
     if (qrSession.shop_id !== shop.id) {
       return res.status(403).json({ error: "QR session belongs to another shop" });
     }
-    if (!qrSession.issued_to_user_id || qrSession.issued_to_user_id !== req.user.id) {
+    const beneficiaryUserId =
+      req.query?.beneficiary_user_id ||
+      req.body?.beneficiary_user_id ||
+      qrSession.issued_to_user_id;
+    if (!qrSession.issued_to_user_id || qrSession.issued_to_user_id !== beneficiaryUserId) {
       return res.status(403).json({ error: "QR session belongs to another user" });
     }
     if (qrSession.is_used) {
@@ -206,9 +210,10 @@ const dispense = async (req, res, next) => {
     const {
       ration_card_id: rationCardId,
       session_id: sessionId,
-      rice_qty: riceQtyRaw = 0,
-      wheat_qty: wheatQtyRaw = 0,
-      sugar_qty: sugarQtyRaw = 0,
+      beneficiary_user_id: beneficiaryUserId,
+      rice_qty_kg: riceQtyRaw = 0,
+      wheat_qty_kg: wheatQtyRaw = 0,
+      sugar_qty_kg: sugarQtyRaw = 0,
     } = req.body;
 
     const riceQty = Number(riceQtyRaw);
@@ -293,7 +298,8 @@ const dispense = async (req, res, next) => {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "QR session belongs to another shop" });
     }
-    if (!session.issued_to_user_id || session.issued_to_user_id !== req.user.id) {
+    const servedBeneficiaryUserId = beneficiaryUserId || session.issued_to_user_id;
+    if (!session.issued_to_user_id || session.issued_to_user_id !== servedBeneficiaryUserId) {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "QR session belongs to another user" });
     }

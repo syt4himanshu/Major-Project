@@ -36,7 +36,7 @@ const AddShopkeeperModal = ({ isOpen, onClose, onSuccess }) => {
         if (!isMounted) {
           return;
         }
-        setShops(response.data?.shops || []);
+        setShops(response.data?.shops || response.data?.data || []);
       } catch (fetchError) {
         if (!isMounted) {
           return;

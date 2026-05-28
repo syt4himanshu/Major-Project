@@ -32,7 +32,7 @@ const Beneficiaries = () => {
         ]);
 
         setAreas(areasResponse.data?.areas || []);
-        setShops(shopsResponse.data?.shops || []);
+        setShops(shopsResponse.data?.shops || shopsResponse.data?.data || []);
       } catch (fetchError) {
         setError(fetchError.response?.data?.error || 'Failed to load filters');
       }
@@ -53,8 +53,9 @@ const Beneficiaries = () => {
         if (filters.shop_id) params.shop_id = filters.shop_id;
 
         const response = await api.get('/api/admin/beneficiaries', { params });
-        setBeneficiaries(response.data?.beneficiaries || []);
-        setTotal(response.data?.total || 0);
+        const payload = response.data || {};
+        setBeneficiaries(payload.beneficiaries || payload.data || []);
+        setTotal(payload.total || payload.pagination?.total || 0);
       } catch (fetchError) {
         setError(fetchError.response?.data?.error || 'Failed to load beneficiaries');
         setBeneficiaries([]);
