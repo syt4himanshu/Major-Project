@@ -62,8 +62,12 @@ const startServer = async () => {
     startEntitlementCron();
     startOtpCleanupCron();
 
-    const server = app.listen(PORT, () => {
-      logger.info(`Server running on port ${PORT}`);
+    const HOST = process.env.HOST || '0.0.0.0';
+    const server = app.listen(PORT, HOST, () => {
+      logger.info(`Server running on ${HOST}:${PORT}`);
+      if (process.env.NODE_ENV !== 'production') {
+        logger.info(`Local access: http://localhost:${PORT}`);
+      }
     });
 
     server.on("error", (error) => {
