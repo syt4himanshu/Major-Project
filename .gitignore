@@ -9,7 +9,7 @@
 ### Dependencies
 node_modules/
 **/node_modules/
-
+replace.txt
 ### Build outputs
 dist/
 build/
