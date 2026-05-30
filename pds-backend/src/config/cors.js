@@ -5,11 +5,19 @@ const DEFAULT_DEV_ORIGINS = [
   "http://127.0.0.1:5173",
   "http://localhost:5174",
   "http://127.0.0.1:5174",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
 ];
 
 const LOCALHOST_REGEX = /^http:\/\/(localhost|127\.0\.0\.1):\d{2,5}$/;
 const PRIVATE_NETWORK_REGEX =
   /^http:\/\/(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}|172\.(1[6-9]|2\d|3[0-1])\.\d{1,3}\.\d{1,3})(:\d{2,5})?$/;
+
+const normalizeOrigin = (origin) => {
+  if (!origin) return origin;
+  // remove trailing slash and surrounding whitespace
+  return origin.trim().replace(/\/$/, "");
+};
 
 const parseOrigins = (value) => {
   if (!value) {
@@ -18,7 +26,7 @@ const parseOrigins = (value) => {
 
   return value
     .split(",")
-    .map((origin) => origin.trim())
+    .map((origin) => normalizeOrigin(origin))
     .filter(Boolean);
 };
 
@@ -35,6 +43,9 @@ const buildAllowedOrigins = () => {
 
 const allowedOrigins = buildAllowedOrigins();
 
+// Log configured origins for visibility in startup logs
+logger.info("CORS allowed origins", { allowedOrigins });
+
 const corsOptions = {
   origin(origin, callback) {
     // Allow requests with no Origin header (React Native, Postman, server-to-server).
@@ -42,12 +53,15 @@ const corsOptions = {
       return callback(null, true);
     }
 
-    if (allowedOrigins.includes(origin)) {
+    const normalizedOrigin = normalizeOrigin(origin);
+
+    if (allowedOrigins.includes(normalizedOrigin)) {
       return callback(null, true);
     }
 
     const isDevelopment = process.env.NODE_ENV !== "production";
-    const allowAllDevOrigins = process.env.CORS_ALLOW_ALL_DEV_ORIGINS !== "false";
+    const allowAllDevOrigins =
+      process.env.CORS_ALLOW_ALL_DEV_ORIGINS !== "false";
 
     // In development, allow all explicit origins unless disabled via env.
     if (isDevelopment && allowAllDevOrigins) {
@@ -56,13 +70,14 @@ const corsOptions = {
 
     if (
       isDevelopment &&
-      (LOCALHOST_REGEX.test(origin) || PRIVATE_NETWORK_REGEX.test(origin))
+      (LOCALHOST_REGEX.test(normalizedOrigin) ||
+        PRIVATE_NETWORK_REGEX.test(normalizedOrigin))
     ) {
       return callback(null, true);
     }
 
     logger.warn("Blocked CORS origin", {
-      origin,
+      origin: normalizedOrigin,
       method: "origin-check",
       nodeEnv: process.env.NODE_ENV || "development",
       allowedOrigins,
