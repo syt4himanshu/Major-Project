@@ -53,6 +53,7 @@ const TopBar = () => {
           <p className="truncate text-sm text-gray-400">
             {shopDetails?.shop?.code ? `${shopDetails.shop.code} · ` : ''}
             {user?.email || 'shopkeeper@pds.gov'}
+            {shopDetails?.shopkeeper?.mobile ? ` · ${shopDetails.shopkeeper.mobile}` : ''}
           </p>
         </div>
 

@@ -52,7 +52,8 @@ const Dashboard = () => {
               <p className="text-gray-300 text-sm">Code: {data?.shop?.code}</p>
               <p className="text-gray-300 text-sm">Area: {data?.shop?.area}</p>
               <p className="text-gray-300 text-sm mt-3">Shopkeeper: {data?.shopkeeper?.name}</p>
-              <p className="text-gray-400 text-sm">{data?.shopkeeper?.email}</p>
+              <p className="text-gray-400 text-sm">Email: {data?.shopkeeper?.email || '—'}</p>
+              <p className="text-gray-400 text-sm">Mobile: {data?.shopkeeper?.mobile || '—'}</p>
             </div>
 
             <div className="bg-gray-900 border border-gray-800 rounded-2xl p-6 flex items-center justify-between">

@@ -13,7 +13,6 @@ import Users from './pages/admin/Users';
 import Areas from './pages/admin/Areas';
 import Shops from './pages/admin/Shops';
 import Entitlements from './pages/admin/Entitlements';
-import Validation from './pages/admin/Validation';
 import AdminSidebar from './components/admin/Sidebar';
 
 // Shopkeeper imports
@@ -41,7 +40,7 @@ function App() {
           <Route path="/login" element={<Login />} />
           <Route path="/unauthorized" element={<Unauthorized />} />
           <Route path="/" element={<Navigate to="/login" replace />} />
-          
+
           {/* Admin Routes */}
           <Route element={<ProtectedRoute allowedRoles={['admin']} />}>
             <Route element={<AdminLayout />}>
@@ -53,10 +52,9 @@ function App() {
               <Route path="/admin/areas" element={<Areas />} />
               <Route path="/admin/shops" element={<Shops />} />
               <Route path="/admin/entitlements" element={<Entitlements />} />
-              <Route path="/admin/validation" element={<Validation />} />
             </Route>
           </Route>
-          
+
           {/* Shopkeeper Routes */}
           <Route element={<ProtectedRoute allowedRoles={['shopkeeper']} />}>
             <Route element={<ShopkeeperLayout />}>

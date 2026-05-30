@@ -10,7 +10,6 @@ const adminRoutes = require("./routes/admin");
 const shopkeeperRoutes = require("./routes/shopkeeper");
 const entitlementRoutes = require("./routes/entitlement");
 const beneficiaryRoutes = require("./routes/beneficiary");
-const validationRoutes = require("./routes/validation");
 const { verifyToken, requireRole } = require("./middleware/auth");
 const { getCorsDebugInfo } = require("./config/cors");
 
@@ -103,7 +102,6 @@ app.use("/api/admin", adminRoutes);
 app.use("/api/admin", entitlementRoutes);
 app.use("/api/shopkeeper", shopkeeperRoutes);
 app.use("/api/beneficiary", beneficiaryRoutes);
-app.use("/api/admin", validationRoutes);
 
 app.get("/api/admin/test", verifyToken, requireRole("admin"), (req, res) => {
   return res.status(200).json({ message: "Admin route works" });
