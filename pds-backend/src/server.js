@@ -1,13 +1,80 @@
 const dotenv = require("dotenv");
+dotenv.config();
+
 const app = require("./app");
 const logger = require("./config/logger");
 const pool = require("./config/db");
 const { startEntitlementCron } = require("./jobs/entitlementCron");
 const { startOtpCleanupCron } = require("./jobs/otpCleanup");
 
-dotenv.config();
+const VALID_NODE_ENVS = ["development", "production", "test"];
+const REQUIRED_ENV_VARS = [
+  "JWT_SECRET",
+  "TWILIO_ACCOUNT_SID",
+  "TWILIO_AUTH_TOKEN",
+  "TWILIO_SERVICE_SID",
+  "NODE_ENV",
+];
+const PORT = Number(process.env.PORT) || 5000;
+const HOST = process.env.HOST || "0.0.0.0";
+let server;
 
-const PORT = process.env.PORT || 5000;
+const redactDatabaseUrl = (url) => {
+  if (!url) return url;
+  return url.replace(/:\/\/([^:]+):([^@]+)@/, "://$1:****@");
+};
+
+const validateEnvironment = () => {
+  const errors = [];
+  const missingVars = REQUIRED_ENV_VARS.filter(
+    (name) => !process.env[name] || process.env[name].trim() === "",
+  );
+
+  const nodeEnv = process.env.NODE_ENV;
+  if (!nodeEnv) {
+    errors.push(
+      "NODE_ENV is required and must be one of production, development, test",
+    );
+  } else if (!VALID_NODE_ENVS.includes(nodeEnv)) {
+    errors.push(
+      `NODE_ENV must be one of ${VALID_NODE_ENVS.join(", ")}, got '${nodeEnv}'`,
+    );
+  }
+
+  const dbVarName = nodeEnv === "test" ? "TEST_DATABASE_URL" : "DATABASE_URL";
+  if (!process.env[dbVarName] || process.env[dbVarName].trim() === "") {
+    missingVars.push(dbVarName);
+  }
+
+  if (missingVars.length > 0) {
+    errors.push(
+      `Missing required environment variables: ${Array.from(
+        new Set(missingVars),
+      ).join(", ")}`,
+    );
+  }
+
+  if (errors.length) {
+    throw new Error(errors.join(" | "));
+  }
+};
+
+const verifyDatabaseConnection = async () => {
+  try {
+    const result = await pool.query("SELECT 1 AS result");
+    logger.info("PostgreSQL connectivity verified", {
+      nodeEnv: process.env.NODE_ENV,
+      databaseUrl: redactDatabaseUrl(process.env.DATABASE_URL),
+      result: result.rows[0],
+    });
+  } catch (error) {
+    logger.error("PostgreSQL connectivity check failed", {
+      message: error.message,
+      stack: error.stack,
+    });
+    throw new Error(`Database connectivity check failed: ${error.message}`);
+  }
+};
 
 const ensureDatabaseGuards = async () => {
   await pool.query(`
@@ -56,16 +123,72 @@ const ensureDatabaseGuards = async () => {
   `);
 };
 
+const shutdown = async (reason) => {
+  if (reason instanceof Error) {
+    logger.error("Shutdown triggered by error", {
+      message: reason.message,
+      stack: reason.stack,
+    });
+  } else {
+    logger.info("Shutdown signal received", { reason });
+  }
+
+  if (server) {
+    logger.info("Closing HTTP server");
+    server.close((err) => {
+      if (err) {
+        logger.error("HTTP server close failed", {
+          message: err.message,
+          stack: err.stack,
+        });
+      }
+    });
+  }
+
+  try {
+    logger.info("Closing database pool");
+    await pool.end();
+    logger.info("Database pool closed");
+  } catch (error) {
+    logger.error("Failed to close database pool", {
+      message: error.message,
+      stack: error.stack,
+    });
+  } finally {
+    process.exit(reason instanceof Error ? 1 : 0);
+  }
+};
+
+process.on("uncaughtException", (error) => {
+  logger.error("Uncaught exception", {
+    message: error.message,
+    stack: error.stack,
+  });
+  shutdown(error);
+});
+
+process.on("unhandledRejection", (reason) => {
+  logger.error("Unhandled promise rejection", {
+    reason: reason instanceof Error ? reason.message : reason,
+    stack: reason instanceof Error ? reason.stack : undefined,
+  });
+  shutdown(new Error("Unhandled promise rejection"));
+});
+
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+process.on("SIGINT", () => shutdown("SIGINT"));
+
 const startServer = async () => {
   try {
+    validateEnvironment();
+    await verifyDatabaseConnection();
     await ensureDatabaseGuards();
     startEntitlementCron();
     startOtpCleanupCron();
 
-    const HOST = process.env.HOST || '0.0.0.0';
-    const server = app.listen(PORT, HOST, () => {
+    server = app.listen(PORT, HOST, () => {
       logger.info(`Server running on ${HOST}:${PORT}`);
-      if (process.env.NODE_ENV !== 'production') {
+      if (process.env.NODE_ENV !== "production") {
         logger.info(`Local access: http://localhost:${PORT}`);
       }
     });
@@ -73,16 +196,25 @@ const startServer = async () => {
     server.on("error", (error) => {
       if (error.code === "EADDRINUSE") {
         logger.error(
-          `Port ${PORT} is already in use. Set a different PORT in your .env and restart.`,
+          `Port ${PORT} is already in use. Set a different PORT in your environment and restart.`,
+          {
+            port: PORT,
+          },
         );
         process.exit(1);
       }
 
-      logger.error("Server failed to start", { message: error.message });
+      logger.error("Server failed to start", {
+        message: error.message,
+        stack: error.stack,
+      });
       process.exit(1);
     });
   } catch (error) {
-    logger.error("Failed to initialize server", { message: error.message });
+    logger.error("Failed to initialize server", {
+      message: error.message,
+      stack: error.stack,
+    });
     process.exit(1);
   }
 };
@@ -91,3 +223,4 @@ if (process.env.NODE_ENV !== "test") {
   startServer();
 }
 
+module.exports = { validateEnvironment, startServer };
