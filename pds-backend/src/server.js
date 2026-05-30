@@ -186,8 +186,30 @@ const startServer = async () => {
     startEntitlementCron();
     startOtpCleanupCron();
 
+    // Enhanced startup diagnostics
+    logger.info("===== BACKEND STARTUP DIAGNOSTICS =====");
+    logger.info("Server Configuration", {
+      NODE_ENV: process.env.NODE_ENV,
+      PORT: PORT,
+      HOST: HOST,
+      JWT_SECRET_SET: !!process.env.JWT_SECRET,
+      CORS_ORIGINS: process.env.CORS_ORIGINS || "not set",
+      CORS_ALLOW_ALL_DEV_ORIGINS:
+        process.env.CORS_ALLOW_ALL_DEV_ORIGINS || "true (default)",
+      DATABASE_URL_HOST: process.env.DATABASE_URL
+        ? new URL(process.env.DATABASE_URL).hostname
+        : "not set",
+    });
+    logger.info("========================================");
+
     server = app.listen(PORT, HOST, () => {
       logger.info(`Server running on ${HOST}:${PORT}`);
+      logger.info("Available Endpoints:", {
+        health: `http://${HOST}:${PORT}/health`,
+        debugCors: `http://${HOST}:${PORT}/debug/cors`,
+        apiInfo: `http://${HOST}:${PORT}/api-info`,
+        authLogin: `http://${HOST}:${PORT}/auth/login (POST)`,
+      });
       if (process.env.NODE_ENV !== "production") {
         logger.info(`Local access: http://localhost:${PORT}`);
       }

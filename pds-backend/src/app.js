@@ -86,6 +86,17 @@ app.use("/api", apiLimiter);
 
 app.use(express.json());
 
+// Request logging middleware for debugging
+app.use((req, res, next) => {
+  logger.debug("Incoming request", {
+    method: req.method,
+    path: req.path,
+    origin: req.get("origin"),
+    userAgent: req.get("user-agent"),
+  });
+  next();
+});
+
 app.use("/auth", authRoutes);
 app.use("/api/auth", authRoutes);
 app.use("/api/admin", adminRoutes);

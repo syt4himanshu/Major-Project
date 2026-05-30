@@ -54,6 +54,13 @@ logger.info("CORS Configuration Startup Logs", {
 
 const corsOptions = {
   origin(origin, callback) {
+    // Log every origin request for debugging
+    logger.debug("CORS origin check", {
+      requestOrigin: origin || "no-origin-header",
+      allowedOrigins: allowedOrigins,
+      nodeEnv: process.env.NODE_ENV,
+    });
+
     // Allow requests with no Origin header (React Native, Postman, server-to-server).
     if (!origin) {
       return callback(null, true);
@@ -62,6 +69,10 @@ const corsOptions = {
     const normalizedOrigin = normalizeOrigin(origin);
 
     if (allowedOrigins.includes(normalizedOrigin)) {
+      logger.debug("CORS origin allowed", {
+        origin: normalizedOrigin,
+        method: "exact-match",
+      });
       return callback(null, true);
     }
 
@@ -71,6 +82,10 @@ const corsOptions = {
 
     // In development, allow all explicit origins unless disabled via env.
     if (isDevelopment && allowAllDevOrigins) {
+      logger.debug("CORS origin allowed", {
+        origin: normalizedOrigin,
+        method: "development-allow-all",
+      });
       return callback(null, true);
     }
 
@@ -79,14 +94,20 @@ const corsOptions = {
       (LOCALHOST_REGEX.test(normalizedOrigin) ||
         PRIVATE_NETWORK_REGEX.test(normalizedOrigin))
     ) {
+      logger.debug("CORS origin allowed", {
+        origin: normalizedOrigin,
+        method: "development-regex-match",
+      });
       return callback(null, true);
     }
 
-    logger.warn("Blocked CORS origin", {
+    logger.warn("CORS origin BLOCKED", {
       origin: normalizedOrigin,
       method: "origin-check",
       nodeEnv: process.env.NODE_ENV || "development",
-      allowedOrigins,
+      allowedOrigins: allowedOrigins,
+      isDevelopment,
+      allowAllDevOrigins,
     });
 
     return callback(new Error("Not allowed by CORS"));
