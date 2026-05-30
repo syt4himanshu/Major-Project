@@ -8,19 +8,17 @@ require("dotenv").config();
 const pool = new Pool({ connectionString: process.env.DATABASE_URL });
 
 const shopsByArea = {
-  Sabarmati: ["Sabarmati Shop 1", "Sabarmati Shop 2", "Sabarmati Shop 3"],
-  Gandhinagar: [
-    "Gandhinagar Shop 1",
-    "Gandhinagar Shop 2",
-    "Gandhinagar Shop 3",
-  ],
-  Madhapar: ["Madhapar Shop 1", "Madhapar Shop 2", "Madhapar Shop 3"],
+  Dharampeth: ["Dharampeth Shop 1", "Dharampeth Shop 2", "Dharampeth Shop 3"],
+
+  Sadar: ["Sadar Shop 1", "Sadar Shop 2", "Sadar Shop 3"],
+
+  Manewada: ["Manewada Shop 1", "Manewada Shop 2", "Manewada Shop 3"],
 };
 
 const areaCodes = {
-  Sabarmati: "SAB",
-  Gandhinagar: "GND",
-  Madhapar: "MDH",
+  Dharampeth: "DHP",
+  Sadar: "SDR",
+  Manewada: "MNW",
 };
 
 async function seed() {
