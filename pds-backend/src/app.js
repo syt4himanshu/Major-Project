@@ -22,6 +22,40 @@ app.options("*", cors(corsOptions));
 
 // Security headers
 app.use(helmet());
+// -----------------------------------------------------------------------------
+// Public health‑check and info endpoints (no auth required)
+// -----------------------------------------------------------------------------
+const pkg = require("../package.json");
+
+// Root endpoint – simple ping
+app.get("/", (req, res) => {
+  logger.info("GET / - health ping", { env: process.env.NODE_ENV });
+  res.json({
+    status: "success",
+    message: "PDS Backend API Running",
+    environment: process.env.NODE_ENV || "development",
+  });
+});
+
+// Basic health probe – useful for Render health checks
+app.get("/health", (req, res) => {
+  logger.info("GET /health - health check", { env: process.env.NODE_ENV });
+  res.json({
+    status: "healthy",
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// API meta‑information
+app.get("/api-info", (req, res) => {
+  logger.info("GET /api-info - meta info", { env: process.env.NODE_ENV });
+  res.json({
+    project: pkg.name || "pds-backend",
+    version: pkg.version || "0.0.0",
+    environment: process.env.NODE_ENV || "development",
+    uptimeSeconds: Math.floor(process.uptime()),
+  });
+});
 
 // Auth routes — strict (brute force protection)
 const authLimiter = rateLimit({
