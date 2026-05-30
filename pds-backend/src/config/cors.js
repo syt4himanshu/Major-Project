@@ -44,7 +44,13 @@ const buildAllowedOrigins = () => {
 const allowedOrigins = buildAllowedOrigins();
 
 // Log configured origins for visibility in startup logs
-logger.info("CORS allowed origins", { allowedOrigins });
+logger.info("CORS Configuration Startup Logs", {
+  nodeEnv: process.env.NODE_ENV || "development",
+  corsOriginsEnv: process.env.CORS_ORIGINS || "not set",
+  allowedOrigins: allowedOrigins,
+  allowAllDevOrigins: process.env.CORS_ALLOW_ALL_DEV_ORIGINS !== "false",
+  originCount: allowedOrigins.length,
+});
 
 const corsOptions = {
   origin(origin, callback) {
@@ -94,4 +100,9 @@ const corsOptions = {
 module.exports = {
   corsOptions,
   allowedOrigins,
+  getCorsDebugInfo: () => ({
+    nodeEnv: process.env.NODE_ENV || "development",
+    corsOriginsEnv: process.env.CORS_ORIGINS || "not set",
+    allowedOrigins: allowedOrigins,
+  }),
 };

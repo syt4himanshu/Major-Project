@@ -12,6 +12,7 @@ const entitlementRoutes = require("./routes/entitlement");
 const beneficiaryRoutes = require("./routes/beneficiary");
 const validationRoutes = require("./routes/validation");
 const { verifyToken, requireRole } = require("./middleware/auth");
+const { getCorsDebugInfo } = require("./config/cors");
 
 dotenv.config();
 
@@ -57,22 +58,31 @@ app.get("/api-info", (req, res) => {
   });
 });
 
+// Temporary CORS debug endpoint (remove in production)
+app.get("/debug/cors", (req, res) => {
+  logger.info("GET /debug/cors - CORS debug info requested", {
+    clientOrigin: req.get("origin"),
+    env: process.env.NODE_ENV,
+  });
+  res.json(getCorsDebugInfo());
+});
+
 // Auth routes — strict (brute force protection)
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
-  message: { error: 'Too many attempts. Try again in 15 minutes.' },
+  message: { error: "Too many attempts. Try again in 15 minutes." },
 });
-app.use('/auth', authLimiter);
-app.use('/api/auth', authLimiter);
+app.use("/auth", authLimiter);
+app.use("/api/auth", authLimiter);
 
 // All other API routes — general limit
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000,
   max: 100,
-  message: { error: 'Too many requests. Slow down.' },
+  message: { error: "Too many requests. Slow down." },
 });
-app.use('/api', apiLimiter);
+app.use("/api", apiLimiter);
 
 app.use(express.json());
 
@@ -93,7 +103,7 @@ app.use((err, req, res, next) => {
     return res.status(403).json({ error: "CORS blocked for this origin" });
   }
 
-  logger.error('Unhandled error', {
+  logger.error("Unhandled error", {
     message: err.message,
     stack: err.stack,
     path: req.path,
