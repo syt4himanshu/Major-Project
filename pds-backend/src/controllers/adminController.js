@@ -398,7 +398,7 @@ const getShops = async (req, res, next) => {
          s.shop_code,
          s.shop_name,
          a.name AS area_name,
-         COALESCE(split_part(sk.email, '@', 1), NULL) AS shopkeeper_name,
+         COALESCE(NULLIF(sk.name, ''), split_part(sk.email, '@', 1), NULL) AS shopkeeper_name,
          sk.mobile AS shopkeeper_mobile,
          COUNT(DISTINCT rc.id)::int AS beneficiary_count
        FROM shops s
@@ -406,13 +406,14 @@ const getShops = async (req, res, next) => {
        LEFT JOIN users sk ON sk.id = s.shopkeeper_id
        LEFT JOIN ration_cards rc ON rc.shop_id = s.id
        ${whereClause}
-       GROUP BY s.id, s.shop_code, s.shop_name, a.name, sk.email, sk.mobile
+       GROUP BY s.id, s.shop_code, s.shop_name, a.name, sk.name, sk.email, sk.mobile
        ORDER BY s.shop_code ASC
        LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
       filterParams,
     );
 
     return res.status(200).json({
+      shops: result.rows,
       data: result.rows,
       pagination: { page, limit, total, total_pages: Math.ceil(total / limit) },
     });
